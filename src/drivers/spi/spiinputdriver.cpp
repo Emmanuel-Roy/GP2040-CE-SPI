@@ -30,6 +30,13 @@ uint8_t SpiInputDriver::calculate_crc8(const uint8_t *data, size_t len) {
     return crc;
 }
 
+static void normalize_packet(uint8_t *buf, size_t len) {
+    for (size_t i = 0; i < len - 1; i++) {
+        buf[i] = (buf[i] << 1) | (buf[i + 1] >> 7);
+    }
+    buf[len - 1] <<= 1;
+}
+
 void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.header = 0xA5;
     tx_ack_packet.slave_id = SLAVE_ID;
@@ -40,20 +47,20 @@ void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.crc8 = calculate_crc8(reinterpret_cast<const uint8_t*>(&tx_ack_packet), 7);
 }
 
-// Safely load ACK bytes into SPI TX FIFO without touching or clearing RX FIFO
-static void fill_tx_fifo(const ControllerSpiAckPacket &ack) {
-    const uint8_t *ack_bytes = reinterpret_cast<const uint8_t*>(&ack);
-    for (size_t i = 0; i < sizeof(ControllerSpiAckPacket); i++) {
-        if (spi_is_writable(SPI_PORT)) {
-            spi_get_hw(SPI_PORT)->dr = static_cast<uint32_t>(ack_bytes[i]);
-        } else {
-            break; // TX FIFO full (8 entries)
+// Write complete 8-byte ACK packet into hardware SPI TX FIFO whenever FIFO is empty
+void SpiInputDriver::fill_tx_fifo() {
+    update_ack_packet();
+    // Check if Transmit FIFO is empty (TFE bit in SR register)
+    if (spi_get_hw(SPI_PORT)->sr & SPI_SSPSR_TFE_BITS) {
+        const uint8_t *ack = reinterpret_cast<const uint8_t*>(&tx_ack_packet);
+        for (size_t i = 0; i < sizeof(ControllerSpiAckPacket); i++) {
+            spi_get_hw(SPI_PORT)->dr = static_cast<uint32_t>(ack[i]);
         }
     }
 }
 
 void SpiInputDriver::initialize() {
-    SwitchDriver::initialize();
+    SwitchProDriver::initialize();
 
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
@@ -92,8 +99,7 @@ void SpiInputDriver::initialize() {
     last_packet_time = 0;
     valid_packet_received = false;
 
-    update_ack_packet();
-    fill_tx_fifo(tx_ack_packet);
+    fill_tx_fifo();
 }
 
 void SpiInputDriver::reset_to_neutral(Gamepad *gamepad) {
@@ -167,28 +173,50 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
     while (spi_is_readable(SPI_PORT)) {
         uint8_t byte = static_cast<uint8_t>(spi_get_hw(SPI_PORT)->dr);
 
-        if (rx_bytes_read < 8) {
+        if (rx_bytes_read == 0) {
+            if (byte == 0x5A || byte == 0xB4 || byte == 0x2D) {
+                current_rx[0] = byte;
+                rx_bytes_read = 1;
+            }
+        } else {
             current_rx[rx_bytes_read++] = byte;
         }
 
         if (rx_bytes_read == 8) {
             rx_bytes_read = 0;
 
-            if (current_rx[0] == 0x5A && current_rx[1] == SLAVE_ID) {
-                uint8_t expected_crc = calculate_crc8(current_rx, 7);
-                if (current_rx[7] == expected_crc) {
-                    memcpy(&last_valid_packet, current_rx, sizeof(ControllerSpiPacket));
-                    last_packet_time = now;
-                    valid_packet_received = true;
-                    valid_packet_counter++;
+            bool valid = false;
+            ControllerSpiPacket pkt = {};
+
+            if (current_rx[0] == 0x5A) {
+                if (calculate_crc8(current_rx, 7) == current_rx[7]) {
+                    memcpy(&pkt, current_rx, sizeof(ControllerSpiPacket));
+                    valid = true;
                 }
+            }
+
+            if (!valid) {
+                uint8_t norm_rx[8];
+                memcpy(norm_rx, current_rx, 8);
+                normalize_packet(norm_rx, 8);
+                if (norm_rx[0] == 0x5A) {
+                    if (calculate_crc8(norm_rx, 7) == norm_rx[7]) {
+                        memcpy(&pkt, norm_rx, sizeof(ControllerSpiPacket));
+                        valid = true;
+                    }
+                }
+            }
+
+            if (valid) {
+                memcpy(&last_valid_packet, &pkt, sizeof(ControllerSpiPacket));
+                last_packet_time = now;
+                valid_packet_received = true;
+                valid_packet_counter++;
             }
         }
     }
 
-    // Keep TX FIFO filled with latest ACK telemetry packet
-    update_ack_packet();
-    fill_tx_fifo(tx_ack_packet);
+    fill_tx_fifo();
 
     if (now - last_packet_time > 250) {
         reset_to_neutral(gamepad);
@@ -198,5 +226,5 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
         gpio_put(PICO_DEFAULT_LED_PIN, 1);
     }
 
-    return SwitchDriver::process(gamepad);
+    return SwitchProDriver::process(gamepad);
 }

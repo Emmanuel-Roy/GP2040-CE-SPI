@@ -1,7 +1,7 @@
 #ifndef SPIINPUTDRIVER_H
 #define SPIINPUTDRIVER_H
 
-#include "drivers/switch/SwitchDriver.h"
+#include "drivers/switchpro/SwitchProDriver.h"
 #include "gamepad.h"
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
@@ -16,7 +16,7 @@
 #define SLAVE_ID    0   // Default Slave ID for this board
 
 #pragma pack(push, 1)
-// Unified 8-Byte Master -> Target SPI Packet Structure (Fits 8-entry RP2040 PL022 TX FIFO)
+// Unified 8-Byte Master -> Target SPI Packet Structure
 struct ControllerSpiPacket {
     uint8_t  header;    // Byte 0: Always 0x5A
     uint8_t  target_id; // Byte 1: Target ID (0..3)
@@ -39,7 +39,7 @@ struct ControllerSpiAckPacket {
 };
 #pragma pack(pop)
 
-class SpiInputDriver : public SwitchDriver {
+class SpiInputDriver : public SwitchProDriver {
 public:
     void initialize() override;
     bool process(Gamepad * gamepad) override;
@@ -58,6 +58,7 @@ private:
     void reset_to_neutral(Gamepad *gamepad);
     void update_gamepad_state(Gamepad *gamepad, const ControllerSpiPacket &packet);
     void update_ack_packet();
+    void fill_tx_fifo();
 };
 
 #endif // SPIINPUTDRIVER_H
