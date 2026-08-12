@@ -40,17 +40,14 @@ void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.crc8 = calculate_crc8(reinterpret_cast<const uint8_t*>(&tx_ack_packet), 7);
 }
 
+// Safely load ACK bytes into SPI TX FIFO without touching or clearing RX FIFO
 static void fill_tx_fifo(const ControllerSpiAckPacket &ack) {
-    while (spi_is_readable(SPI_PORT)) {
-        (void)spi_get_hw(SPI_PORT)->dr;
-    }
-
     const uint8_t *ack_bytes = reinterpret_cast<const uint8_t*>(&ack);
     for (size_t i = 0; i < sizeof(ControllerSpiAckPacket); i++) {
         if (spi_is_writable(SPI_PORT)) {
             spi_get_hw(SPI_PORT)->dr = static_cast<uint32_t>(ack_bytes[i]);
         } else {
-            break;
+            break; // TX FIFO full (8 entries)
         }
     }
 }
@@ -184,13 +181,14 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
                     last_packet_time = now;
                     valid_packet_received = true;
                     valid_packet_counter++;
-
-                    update_ack_packet();
-                    fill_tx_fifo(tx_ack_packet);
                 }
             }
         }
     }
+
+    // Keep TX FIFO filled with latest ACK telemetry packet
+    update_ack_packet();
+    fill_tx_fifo(tx_ack_packet);
 
     if (now - last_packet_time > 250) {
         reset_to_neutral(gamepad);
