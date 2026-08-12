@@ -40,9 +40,7 @@ void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.crc8 = calculate_crc8(reinterpret_cast<const uint8_t*>(&tx_ack_packet), 7);
 }
 
-// Safely load all 8 bytes of ACK packet into RP2040 hardware SPI TX FIFO without blocking
 static void fill_tx_fifo(const ControllerSpiAckPacket &ack) {
-    // Drain any leftover bytes in RX FIFO
     while (spi_is_readable(SPI_PORT)) {
         (void)spi_get_hw(SPI_PORT)->dr;
     }
@@ -52,20 +50,18 @@ static void fill_tx_fifo(const ControllerSpiAckPacket &ack) {
         if (spi_is_writable(SPI_PORT)) {
             spi_get_hw(SPI_PORT)->dr = static_cast<uint32_t>(ack_bytes[i]);
         } else {
-            break; // TX FIFO full (8 bytes loaded); never block CPU in slave mode
+            break;
         }
     }
 }
 
 void SpiInputDriver::initialize() {
-    XInputDriver::initialize();
+    SwitchDriver::initialize();
 
-    // Initialize onboard LED (GP25) for visual SPI & USB hardware diagnostics
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
     gpio_put(PICO_DEFAULT_LED_PIN, 0);
 
-    // Disable physical GPIO button debouncer on slave RP2040
     if (Storage::getInstance().GetGamepad()) {
         Storage::getInstance().GetGamepad()->debouncedGpio = 0;
         Storage::getInstance().GetGamepad()->clearState();
@@ -75,12 +71,10 @@ void SpiInputDriver::initialize() {
         Storage::getInstance().GetProcessedGamepad()->clearState();
     }
 
-    // Initialize SPI0 at 1 MHz in SLAVE mode using SPI CPHA=1 for stable multi-byte transfers
     spi_init(SPI_PORT, 1 * 1000 * 1000);
     spi_set_slave(SPI_PORT, true);
     spi_set_format(SPI_PORT, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST);
 
-    // Configure all 4 pins (RX=GP16, CSn=GP17, SCK=GP18, TX=GP19) into hardware SPI mode ONCE
     gpio_set_function(PIN_SPI_RX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SPI_CS, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SPI_SCK, GPIO_FUNC_SPI);
@@ -101,14 +95,13 @@ void SpiInputDriver::initialize() {
     last_packet_time = 0;
     valid_packet_received = false;
 
-    // Pre-load initial 8-byte ACK packet into TX FIFO
     update_ack_packet();
     fill_tx_fifo(tx_ack_packet);
 }
 
 void SpiInputDriver::reset_to_neutral(Gamepad *gamepad) {
     gamepad->clearState();
-    gamepad->state.lx = 0x8000; // 32768 (>> 8 = 128 exact center)
+    gamepad->state.lx = 0x8000;
     gamepad->state.ly = 0x8000;
     gamepad->state.rx = 0x8000;
     gamepad->state.ry = 0x8000;
@@ -120,12 +113,10 @@ void SpiInputDriver::reset_to_neutral(Gamepad *gamepad) {
 }
 
 void SpiInputDriver::update_gamepad_state(Gamepad *gamepad, const ControllerSpiPacket &packet) {
-    // 0. Reset gamepad state completely on EVERY new SPI frame (no button sticking)
     gamepad->clearState();
 
     uint16_t b = packet.buttons;
 
-    // 1. Explicit D-Pad Mapping (Bits 0..3)
     uint8_t dpad = 0;
     if (b & (1 << 0)) dpad |= GAMEPAD_MASK_UP;
     if (b & (1 << 1)) dpad |= GAMEPAD_MASK_DOWN;
@@ -133,32 +124,30 @@ void SpiInputDriver::update_gamepad_state(Gamepad *gamepad, const ControllerSpiP
     if (b & (1 << 3)) dpad |= GAMEPAD_MASK_RIGHT;
     gamepad->state.dpad = dpad;
 
-    // 2. Explicit GP2040-CE Button Bitmask Mapping (Bits 4..15)
     uint32_t buttons = 0;
-    if (b & (1 << 4))  buttons |= GAMEPAD_MASK_B1;  // B (Switch B)
-    if (b & (1 << 5))  buttons |= GAMEPAD_MASK_B2;  // A (Switch A)
-    if (b & (1 << 6))  buttons |= GAMEPAD_MASK_B3;  // Y (Switch Y)
-    if (b & (1 << 7))  buttons |= GAMEPAD_MASK_B4;  // X (Switch X)
+    if (b & (1 << 4))  buttons |= GAMEPAD_MASK_B1;  // B
+    if (b & (1 << 5))  buttons |= GAMEPAD_MASK_B2;  // A
+    if (b & (1 << 6))  buttons |= GAMEPAD_MASK_B3;  // Y
+    if (b & (1 << 7))  buttons |= GAMEPAD_MASK_B4;  // X
 
-    if (b & (1 << 8))  buttons |= GAMEPAD_MASK_L1;  // L Bumper
-    if (b & (1 << 9))  buttons |= GAMEPAD_MASK_R1;  // R Bumper
-    if (b & (1 << 10)) buttons |= GAMEPAD_MASK_L2;  // ZL Trigger
-    if (b & (1 << 11)) buttons |= GAMEPAD_MASK_R2;  // ZR Trigger
+    if (b & (1 << 8))  buttons |= GAMEPAD_MASK_L1;  // L
+    if (b & (1 << 9))  buttons |= GAMEPAD_MASK_R1;  // R
+    if (b & (1 << 10)) buttons |= GAMEPAD_MASK_L2;  // ZL
+    if (b & (1 << 11)) buttons |= GAMEPAD_MASK_R2;  // ZR
 
     if (b & (1 << 12)) buttons |= GAMEPAD_MASK_S1;  // Select (-)
     if (b & (1 << 13)) buttons |= GAMEPAD_MASK_S2;  // Start (+)
 
-    if (b & (1 << 14)) buttons |= GAMEPAD_MASK_L3;  // L3 Click
-    if (b & (1 << 15)) buttons |= GAMEPAD_MASK_R3;  // R3 Click
+    if (b & (1 << 14)) buttons |= GAMEPAD_MASK_L3;  // L3
+    if (b & (1 << 15)) buttons |= GAMEPAD_MASK_R3;  // R3
 
     gamepad->state.buttons = buttons;
     gamepad->state.aux = 0;
 
-    // 3. Map 8-bit analog sticks to 16-bit range with 0x8000 (32768) center
     gamepad->state.lx = scale_axis_8_to_16(packet.lx);
     gamepad->state.ly = scale_axis_8_to_16(packet.ly);
     gamepad->state.rx = scale_axis_8_to_16(packet.rx);
-    gamepad->state.ry = scale_axis_8_to_16(128); // Neutral RY
+    gamepad->state.ry = scale_axis_8_to_16(128);
 
     gamepad->state.lt = (b & (1 << 10)) ? 255 : 0;
     gamepad->state.rt = (b & (1 << 11)) ? 255 : 0;
@@ -167,7 +156,6 @@ void SpiInputDriver::update_gamepad_state(Gamepad *gamepad, const ControllerSpiP
     gamepad->hasRightAnalogStick = true;
     gamepad->hasAnalogTriggers = false;
 
-    // Copy to processedGamepad so GP2040-CE subsystems see identical state
     if (Storage::getInstance().GetProcessedGamepad()) {
         memcpy(&Storage::getInstance().GetProcessedGamepad()->state, &gamepad->state, sizeof(GamepadState));
     }
@@ -179,7 +167,6 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
     static size_t rx_bytes_read = 0;
     static uint8_t current_rx[8] = {0};
 
-    // 1. Drain RX FIFO as Master clocks SCK bytes in
     while (spi_is_readable(SPI_PORT)) {
         uint8_t byte = static_cast<uint8_t>(spi_get_hw(SPI_PORT)->dr);
 
@@ -187,9 +174,8 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
             current_rx[rx_bytes_read++] = byte;
         }
 
-        // When a full 8-byte transfer is completed by Master:
         if (rx_bytes_read == 8) {
-            rx_bytes_read = 0; // Reset for next transfer
+            rx_bytes_read = 0;
 
             if (current_rx[0] == 0x5A && current_rx[1] == SLAVE_ID) {
                 uint8_t expected_crc = calculate_crc8(current_rx, 7);
@@ -198,33 +184,21 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
                     last_packet_time = now;
                     valid_packet_received = true;
                     valid_packet_counter++;
+
+                    update_ack_packet();
+                    fill_tx_fifo(tx_ack_packet);
                 }
             }
-
-            // Immediately update and pre-load the next 8-byte ACK into TX FIFO
-            update_ack_packet();
-            fill_tx_fifo(tx_ack_packet);
         }
     }
 
-    // 2. Enforce Gamepad State
-    bool spi_active = valid_packet_received && (now - last_packet_time <= 200);
-    if (spi_active) {
-        update_gamepad_state(gamepad, last_valid_packet);
-    } else {
+    if (now - last_packet_time > 250) {
         reset_to_neutral(gamepad);
-        valid_packet_received = false;
-    }
-
-    // 3. Hardware LED Status Diagnostic Indicator (GP25)
-    bool usb_mounted = tud_mounted();
-    if (!usb_mounted) {
-        gpio_put(PICO_DEFAULT_LED_PIN, (now / 100) % 2); // 10 Hz Fast Blink
-    } else if (!spi_active) {
-        gpio_put(PICO_DEFAULT_LED_PIN, (now / 500) % 2); // 1 Hz Slow Blink
+        gpio_put(PICO_DEFAULT_LED_PIN, 0);
     } else {
-        gpio_put(PICO_DEFAULT_LED_PIN, 1);               // Solid ON
+        update_gamepad_state(gamepad, last_valid_packet);
+        gpio_put(PICO_DEFAULT_LED_PIN, 1);
     }
 
-    return XInputDriver::process(gamepad);
+    return SwitchDriver::process(gamepad);
 }

@@ -1,7 +1,7 @@
 #ifndef SPIINPUTDRIVER_H
 #define SPIINPUTDRIVER_H
 
-#include "drivers/xinput/XInputDriver.h"
+#include "drivers/switch/SwitchDriver.h"
 #include "gamepad.h"
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
@@ -39,7 +39,7 @@ struct ControllerSpiAckPacket {
 };
 #pragma pack(pop)
 
-class SpiInputDriver : public XInputDriver {
+class SpiInputDriver : public SwitchDriver {
 public:
     void initialize() override;
     bool process(Gamepad * gamepad) override;
