@@ -33,7 +33,6 @@
 #include "addons/gamepad_usb_host.h"
 #include "addons/he_trigger.h"
 #include "addons/tg16_input.h"
-#include "addons/spi_slave_input.h"
 
 // Pico includes
 #include "pico/bootrom.h"
@@ -70,7 +69,7 @@ void GP2040::setup() {
 	Storage::getInstance().SetProcessedGamepad(processedGamepad);
 
 	BootModeOptions& bootModeOptions = Storage::getInstance().getBootModeOptions();
-	BootAction bootAction;
+	BootAction bootAction = {};
 
 	GamepadOptions& gamepadOptions = Storage::getInstance().getGamepadOptions();
 	uint32_t prevProfile = gamepadOptions.profileNumber;
@@ -117,7 +116,6 @@ void GP2040::setup() {
 	addons.LoadAddon(new RotaryEncoderInput());
 	addons.LoadAddon(new PCF8575Addon());
 	addons.LoadAddon(new TG16padInput());
-	addons.LoadAddon(new SpiSlaveInput());
 
 	// Input override addons
 	addons.LoadAddon(new ReverseInput());
@@ -141,20 +139,14 @@ void GP2040::setup() {
 		return;
 	}
 
-	InputMode inputMode = bootAction.inputMode;
+	// Force SPI Slave input mode unconditionally for Ounce Slave firmware
+	InputMode inputMode = INPUT_MODE_SPI;
+	gamepad->setInputMode(INPUT_MODE_SPI);
+	gamepadOptions.inputMode = INPUT_MODE_SPI;
 	uint32_t profile = bootAction.profileNumber;
 
 	// Setup USB Driver
 	DriverManager::getInstance().setup(inputMode);
-
-	if (inputMode != INPUT_MODE_CONFIG) {
-		bool inputModeChanged = inputMode != gamepadOptions.inputMode;
-		if (inputModeChanged) gamepad->setInputMode(inputMode);
-
-		// save to match user expectations on choosing mode at boot, and this is
-		// before USB host will be used so we can force it to ignore the check
-		if (inputModeChanged || profileChanged) Storage::getInstance().save(true);
-	}
 
 	// register system event handlers
 	EventManager::getInstance().registerEventHandler(GP_EVENT_STORAGE_SAVE, GPEVENT_CALLBACK(this->handleStorageSave(event)));
@@ -165,19 +157,9 @@ void GP2040::setup() {
  * @brief Initialize standard input button GPIOs that are present in the currently loaded profile.
  */
 void GP2040::initializeStandardGpio() {
-	GpioMappingInfo* pinMappings = Storage::getInstance().getProfilePinMappings();
+	// Unconditionally disable all physical GPIO button reading on SPI Slave firmware
 	buttonGpios = 0;
-	for (Pin_t pin = 0; pin < (Pin_t)NUM_BANK0_GPIOS; pin++)
-	{
-		// (NONE=-10, RESERVED=-5, ASSIGNED_TO_ADDON=0, everything else is ours)
-		if (pinMappings[pin].action > 0)
-		{
-			gpio_init(pin);             // Initialize pin
-			gpio_set_dir(pin, GPIO_IN); // Set as INPUT
-			gpio_pull_up(pin);          // Set as PULLUP
-			buttonGpios |= 1 << pin;    // mark this pin as mattering for GPIO debouncing
-		}
-	}
+	return;
 }
 
 /**
@@ -248,6 +230,15 @@ void GP2040::run() {
 
 	if (configMode == true ) {
 		rndis_init(WEB_CONFIG_HOSTNAME);
+	}
+
+	// Pure SPI Mode bypasses all physical GPIO polling, ADC reading, and add-on processing
+	if (DriverManager::getInstance().getInputMode() == INPUT_MODE_SPI) {
+		while (1) {
+			inputDriver->process(gamepad);
+			tud_task();
+			checkSaveRebootState();
+		}
 	}
 
 	while (1) { // LOOP
