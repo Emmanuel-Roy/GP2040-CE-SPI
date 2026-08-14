@@ -5,6 +5,7 @@
 #include "gamepad.h"
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
+#include "pico/unique_id.h"
 #include <cstdint>
 
 #define SPI_PORT    spi0
@@ -91,6 +92,12 @@ private:
     // lets one firmware image serve all four slots instead of needing four
     // builds that differ only by SLAVE_ID.
     uint8_t  learned_slave_id = SLAVE_ID;
+
+    // This board's hardware unique id, streamed to the master a byte at a time
+    // through the ACK's spare byte. Same value this board reports as its USB
+    // serial, which is what lets the host tie a slot to a physical device.
+    uint8_t  board_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES] = {0};
+    bool     board_id_loaded = false;
 
     ControllerSpiPacket last_valid_packet = {};
     ControllerSpiAckPacket tx_ack_packet = {};

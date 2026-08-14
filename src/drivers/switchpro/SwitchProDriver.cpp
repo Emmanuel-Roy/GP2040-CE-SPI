@@ -2,6 +2,7 @@
 #include "drivers/shared/driverhelper.h"
 #include "storagemanager.h"
 #include "pico/rand.h"
+#include "pico/unique_id.h"
 
 // force a report to be sent every X ms
 #define SWITCH_PRO_KEEPALIVE_TIMER 5
@@ -530,6 +531,21 @@ bool SwitchProDriver::vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb
 }
 
 const uint16_t * SwitchProDriver::get_descriptor_string_cb(uint8_t index, uint16_t langid) {
+	// Index 3 is iSerialNumber. The table's entry is a fixed constant, which
+	// means every Ounce slave enumerates as an identical device: the host then
+	// cannot tell four boards apart (SDL reports the same GUID for all of
+	// them and exposes no serial), and USB enumeration order becomes arbitrary
+	// and unstable across replugs. Report this board's hardware unique ID
+	// instead, so each slave is a distinct, persistent device to the host.
+	// Real Pro Controllers have unique serials too, so this is more faithful,
+	// not less.
+	if (index == 3) {
+		static char unique_serial[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1] = {0};
+		if (unique_serial[0] == '\0') {
+			pico_get_unique_board_id_string(unique_serial, sizeof(unique_serial));
+		}
+		return getStringDescriptor(unique_serial, index);
+	}
 	const char *value = (const char *)switch_pro_string_descriptors[index];
 	return getStringDescriptor(value, index); // getStringDescriptor returns a static array
 }

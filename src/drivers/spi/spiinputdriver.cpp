@@ -46,7 +46,19 @@ void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.status_flags = valid_packet_received ? 0x03 : 0x01;
     tx_ack_packet.player_leds = 1;
     tx_ack_packet.packet_count = valid_packet_counter;
-    tx_ack_packet.reserved = 0x00;
+    // Rotate this board's hardware unique id through the spare ACK byte, one
+    // byte per packet, so the master can learn which physical board answers on
+    // each slot. The index is derived from the packet counter rather than sent
+    // explicitly - the master already receives that counter, so no extra field
+    // is needed. It matches the USB serial the same board reports to the host,
+    // which is what ties "slot N" to a specific device on the PC.
+    if (!board_id_loaded) {
+        pico_unique_board_id_t id;
+        pico_get_unique_board_id(&id);
+        memcpy(board_id, id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
+        board_id_loaded = true;   // explicit flag: a real id may begin with 0x00
+    }
+    tx_ack_packet.reserved = board_id[valid_packet_counter % PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
     tx_ack_packet.crc8 = calculate_crc8(reinterpret_cast<const uint8_t*>(&tx_ack_packet), 7);
 }
 
