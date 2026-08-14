@@ -47,11 +47,17 @@ void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.crc8 = calculate_crc8(reinterpret_cast<const uint8_t*>(&tx_ack_packet), 7);
 }
 
-// Write complete 8-byte ACK packet into hardware SPI TX FIFO whenever FIFO is empty
+// Preload the whole ACK packet into the hardware SPI TX FIFO once it has drained.
 void SpiInputDriver::fill_tx_fifo() {
     update_ack_packet();
     // Check if Transmit FIFO is empty (TFE bit in SR register)
     if (spi_get_hw(SPI_PORT)->sr & SPI_SSPSR_TFE_BITS) {
+        // Exactly SPI_ACK_VALID_BYTES - never more. The FIFO is 8 entries deep
+        // and cannot drain while the master is idle between polls, so a 9th
+        // write would just be discarded (taking the CRC with it). Writing only
+        // what fits also keeps this loop free of any wait, which matters: this
+        // runs every process() call and any stall here delays draining the RX
+        // FIFO, which is what starves the input path.
         const uint8_t *ack = reinterpret_cast<const uint8_t*>(&tx_ack_packet);
         for (size_t i = 0; i < sizeof(ControllerSpiAckPacket); i++) {
             spi_get_hw(SPI_PORT)->dr = static_cast<uint32_t>(ack[i]);
@@ -75,7 +81,7 @@ void SpiInputDriver::initialize() {
         Storage::getInstance().GetProcessedGamepad()->clearState();
     }
 
-    spi_init(SPI_PORT, 1 * 1000 * 1000);
+    spi_init(SPI_PORT, 4 * 1000 * 1000);   // must match the master exactly
     spi_set_slave(SPI_PORT, true);
     spi_set_format(SPI_PORT, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST);
 
@@ -92,10 +98,11 @@ void SpiInputDriver::initialize() {
     memset(rx_buf, 0, sizeof(rx_buf));
     memset(&last_valid_packet, 0, sizeof(last_valid_packet));
     last_valid_packet.header = 0x5A;
-    last_valid_packet.target_id = SLAVE_ID;
+    last_valid_packet.flags = SLAVE_ID;   // target id only; Home/Capture cleared
     last_valid_packet.lx = 128;
     last_valid_packet.ly = 128;
     last_valid_packet.rx = 128;
+    last_valid_packet.ry = 128;
     last_packet_time = 0;
     valid_packet_received = false;
 
@@ -144,13 +151,17 @@ void SpiInputDriver::update_gamepad_state(Gamepad *gamepad, const ControllerSpiP
     if (b & (1 << 14)) buttons |= GAMEPAD_MASK_L3;  // L3
     if (b & (1 << 15)) buttons |= GAMEPAD_MASK_R3;  // R3
 
+    // Home and Capture ride in the spare bits of the flags byte
+    if (packet.flags & SPI_AUX_MASK_HOME)    buttons |= GAMEPAD_MASK_A1;  // Home
+    if (packet.flags & SPI_AUX_MASK_CAPTURE) buttons |= GAMEPAD_MASK_A2;  // Capture
+
     gamepad->state.buttons = buttons;
     gamepad->state.aux = 0;
 
     gamepad->state.lx = scale_axis_8_to_16(packet.lx);
     gamepad->state.ly = scale_axis_8_to_16(packet.ly);
     gamepad->state.rx = scale_axis_8_to_16(packet.rx);
-    gamepad->state.ry = scale_axis_8_to_16(128);
+    gamepad->state.ry = scale_axis_8_to_16(packet.ry);
 
     gamepad->state.lt = (b & (1 << 10)) ? 255 : 0;
     gamepad->state.rt = (b & (1 << 11)) ? 255 : 0;
@@ -168,7 +179,7 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
 
     static size_t rx_bytes_read = 0;
-    static uint8_t current_rx[8] = {0};
+    static uint8_t current_rx[9] = {0};
 
     while (spi_is_readable(SPI_PORT)) {
         uint8_t byte = static_cast<uint8_t>(spi_get_hw(SPI_PORT)->dr);
@@ -182,25 +193,25 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
             current_rx[rx_bytes_read++] = byte;
         }
 
-        if (rx_bytes_read == 8) {
+        if (rx_bytes_read == sizeof(ControllerSpiPacket)) {
             rx_bytes_read = 0;
 
             bool valid = false;
             ControllerSpiPacket pkt = {};
 
             if (current_rx[0] == 0x5A) {
-                if (calculate_crc8(current_rx, 7) == current_rx[7]) {
+                if (calculate_crc8(current_rx, 8) == current_rx[8]) {
                     memcpy(&pkt, current_rx, sizeof(ControllerSpiPacket));
                     valid = true;
                 }
             }
 
             if (!valid) {
-                uint8_t norm_rx[8];
-                memcpy(norm_rx, current_rx, 8);
-                normalize_packet(norm_rx, 8);
+                uint8_t norm_rx[sizeof(ControllerSpiPacket)];
+                memcpy(norm_rx, current_rx, sizeof(norm_rx));
+                normalize_packet(norm_rx, sizeof(norm_rx));
                 if (norm_rx[0] == 0x5A) {
-                    if (calculate_crc8(norm_rx, 7) == norm_rx[7]) {
+                    if (calculate_crc8(norm_rx, 8) == norm_rx[8]) {
                         memcpy(&pkt, norm_rx, sizeof(ControllerSpiPacket));
                         valid = true;
                     }

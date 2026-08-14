@@ -15,19 +15,45 @@
 
 #define SLAVE_ID    0   // Default Slave ID for this board
 
+// Contents of ControllerSpiPacket.flags. The target id only needs 2 bits, so
+// the Switch Pro's two remaining buttons ride in the top of the same byte.
+//
+// Why this packet is 9 bytes and not 8: four 8-bit axes (32 bits) plus 18
+// buttons is 50 bits of payload, but 8 bytes leaves only 48 after the header
+// and CRC. Fitting 8 bytes would require cutting analog resolution or sending
+// some inputs less often than others, and neither is acceptable - every input
+// keeps full 8-bit range and every input updates at the same rate.
+// MUST stay in sync with Hardware/host-src/include/packet.h
+#define SPI_TARGET_ID_MASK   0x03
+#define SPI_AUX_MASK_HOME    (1 << 6)
+#define SPI_AUX_MASK_CAPTURE (1 << 7)
+
 #pragma pack(push, 1)
-// Unified 8-Byte Master -> Target SPI Packet Structure
+// Unified 9-Byte Master -> Target SPI Packet Structure.
+// Carries the complete Switch Pro Controller state every poll: 18 buttons (16
+// here plus Home/Capture in flags) and all four analog axes at full 8-bit
+// range. Nothing is multiplexed, so no input updates faster than another.
 struct ControllerSpiPacket {
     uint8_t  header;    // Byte 0: Always 0x5A
-    uint8_t  target_id; // Byte 1: Target ID (0..3)
+    uint8_t  flags;     // Byte 1: [1:0] Target ID, [6] Home, [7] Capture
     uint16_t buttons;   // Bytes 2..3: 16-bit button bitmask
     uint8_t  lx;        // Byte 4: Left Stick X (0..255, center 128)
     uint8_t  ly;        // Byte 5: Left Stick Y (0..255, center 128)
     uint8_t  rx;        // Byte 6: Right Stick X (0..255, center 128)
-    uint8_t  crc8;      // Byte 7: Polynomial 0x07 over bytes 0..6
+    uint8_t  ry;        // Byte 7: Right Stick Y (0..255, center 128)
+    uint8_t  crc8;      // Byte 8: Polynomial 0x07 over bytes 0..7
 };
 
-// Unified 8-Byte Target -> Master MISO ACK & Telemetry Packet Structure
+// Unified 9-Byte Target -> Master MISO ACK & Telemetry Packet Structure.
+// A synchronous SPI transfer clocks the same number of bytes in both
+// directions, so this must be the same size as ControllerSpiPacket.
+//
+// IMPORTANT: only the first 8 bytes are actually transmitted. This PL022's TX
+// FIFO holds exactly 8 entries and fill_tx_fifo() preloads the whole ACK in
+// one go while the master is idle, so a 9th byte cannot be queued - it is
+// silently discarded. The reply has room to spare, so every meaningful field
+// and the CRC lives in bytes 0..7 and byte 8 is never written. (This is why
+// the command packet may be 9 bytes but the ACK may not.)
 struct ControllerSpiAckPacket {
     uint8_t  header;        // Byte 0: Always 0xA5 (ACK Header)
     uint8_t  slave_id;      // Byte 1: Target ID (0..3)
@@ -36,8 +62,16 @@ struct ControllerSpiAckPacket {
     uint16_t packet_count;  // Bytes 4..5: Received Valid Packet Count
     uint8_t  reserved;      // Byte 6: 0x00
     uint8_t  crc8;          // Byte 7: Polynomial 0x07 over bytes 0..6
+    uint8_t  pad;           // Byte 8: NOT transmitted - never written
 };
+
+// Bytes of the ACK that are actually transmitted and covered by its CRC.
+#define SPI_ACK_VALID_BYTES 8
 #pragma pack(pop)
+
+static_assert(sizeof(ControllerSpiPacket) == sizeof(ControllerSpiAckPacket),
+              "command and ACK packets must be the same size - a synchronous SPI "
+              "transfer clocks equal byte counts in both directions");
 
 class SpiInputDriver : public SwitchProDriver {
 public:
