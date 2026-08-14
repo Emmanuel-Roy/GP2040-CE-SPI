@@ -39,7 +39,10 @@ static void normalize_packet(uint8_t *buf, size_t len) {
 
 void SpiInputDriver::update_ack_packet() {
     tx_ack_packet.header = 0xA5;
-    tx_ack_packet.slave_id = SLAVE_ID;
+    // Echo back the slot this board is being addressed as. The master checks
+    // rx_ack.slave_id against the target it selected, so this is what lets a
+    // single firmware image work in any of the four slots.
+    tx_ack_packet.slave_id = learned_slave_id;
     tx_ack_packet.status_flags = valid_packet_received ? 0x03 : 0x01;
     tx_ack_packet.player_leds = 1;
     tx_ack_packet.packet_count = valid_packet_counter;
@@ -219,6 +222,7 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
             }
 
             if (valid) {
+                learned_slave_id = pkt.flags & SPI_TARGET_ID_MASK;
                 memcpy(&last_valid_packet, &pkt, sizeof(ControllerSpiPacket));
                 last_packet_time = now;
                 valid_packet_received = true;

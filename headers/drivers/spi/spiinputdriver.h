@@ -85,6 +85,13 @@ private:
     bool     valid_packet_received = false;
     uint16_t valid_packet_counter = 0;
 
+    // Learned at runtime from the packets this board actually receives, rather
+    // than compiled in - chip-select already decides which slave listens, so
+    // any packet arriving here is by definition addressed to this board. That
+    // lets one firmware image serve all four slots instead of needing four
+    // builds that differ only by SLAVE_ID.
+    uint8_t  learned_slave_id = SLAVE_ID;
+
     ControllerSpiPacket last_valid_packet = {};
     ControllerSpiAckPacket tx_ack_packet = {};
 
