@@ -317,7 +317,10 @@ ${PROTO_OUTPUT_DIR}/enums.pb.c
 ${PROTO_OUTPUT_DIR}/config.pb.c
 )
 
-set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME ${PROJECT_NAME}_${CMAKE_PROJECT_VERSION}_${GP2040_BOARDCONFIG})
+# Ounce builds this fork for one purpose, so the image is named for that rather
+# than carrying upstream's version_boardconfig scheme - the servants all run the
+# same file and it is the servant half of OunceMaster.
+set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME OunceServant)
 
 pico_set_program_name(GP2040-CE "GP2040-CE")
 pico_set_program_version(GP2040-CE ${GIT_REPO_VERSION})
