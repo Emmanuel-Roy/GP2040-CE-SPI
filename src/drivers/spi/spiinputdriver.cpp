@@ -245,13 +245,23 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
 
     fill_tx_fifo();
 
-    if (now - last_packet_time > 250) {
+    const bool fresh = (now - last_packet_time <= 250);
+    if (!fresh) {
         reset_to_neutral(gamepad);
-        gpio_put(PICO_DEFAULT_LED_PIN, 0);
     } else {
         update_gamepad_state(gamepad, last_valid_packet);
-        gpio_put(PICO_DEFAULT_LED_PIN, 1);
     }
+
+    // The LED reports whether the host has this player enabled, read from the
+    // enabled bitmask every packet carries, rather than merely whether bytes
+    // arrived. Those are the same thing today - the master only polls enabled
+    // slots - but this states the intent, so the light keeps meaning "the host
+    // is driving this player" even if the master later polls a slot for some
+    // other reason. Still gated on fresh traffic: with the host gone there is
+    // no enable state to report and the board is not driving anything.
+    const uint8_t enabled = SPI_ENABLED_SLOTS(last_valid_packet.flags);
+    const bool host_enabled = (enabled >> learned_slave_id) & 1u;
+    gpio_put(PICO_DEFAULT_LED_PIN, (fresh && host_enabled) ? 1 : 0);
 
     return SwitchProDriver::process(gamepad);
 }

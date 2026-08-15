@@ -29,6 +29,13 @@
 #define SPI_AUX_MASK_HOME    (1 << 6)
 #define SPI_AUX_MASK_CAPTURE (1 << 7)
 
+// Bits 2..5 carry which player slots the host currently has enabled, one bit
+// per slot. Every packet carries it, so a board can tell whether the host
+// actually means to be driving it - which is what the onboard LED reports.
+#define SPI_ENABLED_SHIFT    2
+#define SPI_ENABLED_MASK     0x3C
+#define SPI_ENABLED_SLOTS(flags) (((flags) & SPI_ENABLED_MASK) >> SPI_ENABLED_SHIFT)
+
 #pragma pack(push, 1)
 // Unified 9-Byte Master -> Target SPI Packet Structure.
 // Carries the complete Switch Pro Controller state every poll: 18 buttons (16
