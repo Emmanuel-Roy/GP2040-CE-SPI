@@ -74,7 +74,7 @@ void SpiInputDriver::fill_tx_fifo() {
         // runs every process() call and any stall here delays draining the RX
         // FIFO, which is what starves the input path.
         const uint8_t *ack = reinterpret_cast<const uint8_t*>(&tx_ack_packet);
-        for (size_t i = 0; i < sizeof(ControllerSpiAckPacket); i++) {
+        for (size_t i = 0; i < SPI_ACK_VALID_BYTES; i++) {
             spi_get_hw(SPI_PORT)->dr = static_cast<uint32_t>(ack[i]);
         }
     }
