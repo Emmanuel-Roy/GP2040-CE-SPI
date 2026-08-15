@@ -8,6 +8,11 @@
 #define PICO_DEFAULT_LED_PIN 25
 #endif
 
+// Half a flash period, so the LED completes an on/off cycle every 500ms while
+// the host has this player enabled. Slow enough to read across four boards at
+// a glance, fast enough not to be mistaken for something stuck.
+#define LED_FLASH_HALF_PERIOD_MS 250
+
 static inline uint16_t scale_axis_8_to_16(uint8_t val) {
     if (val == 128) return 0x8000; // 32768 exact center (>> 8 = 128)
     if (val == 255) return 0xFFFF; // 65535 max (>> 8 = 255)
@@ -252,16 +257,20 @@ bool SpiInputDriver::process(Gamepad *gamepad) {
         update_gamepad_state(gamepad, last_valid_packet);
     }
 
-    // The LED reports whether the host has this player enabled, read from the
-    // enabled bitmask every packet carries, rather than merely whether bytes
-    // arrived. Those are the same thing today - the master only polls enabled
-    // slots - but this states the intent, so the light keeps meaning "the host
-    // is driving this player" even if the master later polls a slot for some
-    // other reason. Still gated on fresh traffic: with the host gone there is
-    // no enable state to report and the board is not driving anything.
+    // The LED flashes while the host has this player enabled, and is off any
+    // other time. Enablement is read from the bitmask every packet carries
+    // rather than inferred from bytes merely arriving, so the light means "the
+    // host is driving this player" outright. Gated on fresh traffic too: with
+    // the host gone there is no enable state to report.
+    //
+    // Flashing rather than solid because a steady LED is also what a Pico shows
+    // for plenty of unrelated reasons - it cannot be told apart from a board
+    // that is simply powered. A blink is unambiguously this firmware saying the
+    // host has it enabled.
     const uint8_t enabled = SPI_ENABLED_SLOTS(last_valid_packet.flags);
     const bool host_enabled = (enabled >> learned_slave_id) & 1u;
-    gpio_put(PICO_DEFAULT_LED_PIN, (fresh && host_enabled) ? 1 : 0);
+    const bool phase = (now / LED_FLASH_HALF_PERIOD_MS) & 1u;
+    gpio_put(PICO_DEFAULT_LED_PIN, (fresh && host_enabled && phase) ? 1 : 0);
 
     return SwitchProDriver::process(gamepad);
 }
